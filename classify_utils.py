@@ -92,6 +92,11 @@ def plot_pair_modulation(tot_counts, asymms, env, title = None):
     return
                     
 def get_modulated_pairs(spikes,vars, env, kept, dt = 10/1000, var_thresh = 0.1, count_thresh = 100, plot = True):
+    """Count connections between categories in vars using spikes and kept unit indices.
+
+    Return counts and rows [n1, n2, overlap, active_units, tested_pairs],
+    where tested pairs pass count_thresh and the existing overlap exclusion.
+    """
 
     ntot, ncat = vars.shape
     all_pairs = []
@@ -117,9 +122,9 @@ def get_modulated_pairs(spikes,vars, env, kept, dt = 10/1000, var_thresh = 0.1, 
                                 spk1, spk2 = spikes[trial, n1], spikes[trial, n2] # (spikes, )
 
                                 # find all spike pairs that fall within 10 ms
-                                count_fwd += (np.searchsorted(spk2, spk1, side="left") - np.searchsorted(spk2, spk1-dt, side="left")).sum()
+                                count_bwd += (np.searchsorted(spk2, spk1, side="left") - np.searchsorted(spk2, spk1-dt, side="left")).sum()
 
-                                count_bwd += (np.searchsorted(spk2, spk1+dt, side="right") - np.searchsorted(spk2, spk1,  side="right")).sum()
+                                count_fwd += (np.searchsorted(spk2, spk1+dt, side="right") - np.searchsorted(spk2, spk1,  side="right")).sum()
 
                             if count_fwd + count_bwd > count_thresh: # minimum number of spike pairs in interval
                                 pairs.append((n1, n2)) # neuron pair
@@ -140,6 +145,7 @@ def get_modulated_pairs(spikes,vars, env, kept, dt = 10/1000, var_thresh = 0.1, 
                     print(i, j, pairs[conn])
 
                 all_pairs.append(len(putative_conns))
+                all_ns[-1].append(len(pairs)) # pairs passing the spike-count threshold
                 
     return np.array(all_pairs), np.array(all_ns)
 

@@ -10,7 +10,7 @@ from classify_utils import get_regressors, get_modulated_pairs
 all_pairs, all_ns = [], []
 for sesh in range(5, 39):
     print("sesh:", sesh)
-    trials, spikes = get_data(sub = "subject_G", sesh = 5)
+    trials, spikes = get_data(sub = "subject_G", sesh = sesh)
     num_trials, num_cells = spikes.shape
     rule_cues = np.array(trials["rule_cue"])
     # get regressors
@@ -76,5 +76,28 @@ for sesh in range(5, 39):
     new_pairs, new_ns = get_modulated_pairs(spikes, all_uvars, env, keep_active, plot = False)
     all_pairs.append(new_pairs)
     all_ns.append(new_ns)
+
+# %%
+
+pairs, ns = np.array(all_pairs), np.array(all_ns)
+
+# Sum session-specific independence expectations before calculating overlap enrichment.
+observed = ns[:, :, 2].sum(axis = 0)
+expected = (ns[:, :, 0] * ns[:, :, 1] / ns[:, :, 3]).sum(axis = 0)
+enrichment = observed / expected
+frac1, frac2, frac3, frac4 = enrichment[[0, 8, 2, 4]] # X1/X2, S1/S2, X1/S2, X2/S1
+
+
+# %%
+
+
+# Pool detected and tested pairs across sessions before calculating detection rates.
+pairtots = pairs.sum(axis = 0)
+tested = ns[:, :, 4].sum(axis = 0)
+predicted = pairtots[[1, 5]].sum() / tested[[1, 5]].sum() # (X1 -> S1), (X2 -> S2)
+pred_rev = pairtots[[6, 10]].sum() / tested[[6, 10]].sum() # (S1 -> X1), (S2 -> X2)
+control = pairtots[[2, 4]].sum() / tested[[2, 4]].sum() # (X1 -> S2), (X2 -> S1)
+ctrl_rev = pairtots[[7, 9]].sum() / tested[[7, 9]].sum() # (S1 -> X2), (S2 -> X1)
+within = pairtots[[0, 3, 8, 11]].sum() / tested[[0, 3, 8, 11]].sum() # (X1 -> X2), (X2 -> X1), (S1 -> S2), (S2 -> S1)
 
 # %%
