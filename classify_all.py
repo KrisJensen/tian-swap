@@ -1,16 +1,26 @@
 
 #%%
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import ElasticNet
 from load_data import get_data, get_binned_activity
 from utils import var_explained
-from classify_utils import get_regressors, get_modulated_pairs
+from classify_utils import get_regressors, get_jitter_pairs, shuffle_spikes
 
 #%% load data
-all_pairs, all_ns = [], []
+# Keep the epoch and test parameters explicit; alpha is uncorrected for each tail.
+subject = "subject_G"
+t0, t1 = -1.7, 0.74
+jitter_params = dict(var_thresh = 0.1, min_spikes = 100, lag = (0.0005, 0.006), jitter = 0.020, n_jitter = 201, alpha = 0.01, seed = 0)
+shuffle_conditions = ("target_1", "target_2", "rule_cue")
+shuffle_seed = 0
+
+# Store separate counts and shared tested-pair denominators for both connection signs.
+all_exc, all_inh, all_ns, all_exc_shuff, all_inh_shuff, all_ns_shuff = [[] for _ in range(6)]
+all_connections = []
 for sesh in range(5, 39):
     print("sesh:", sesh)
-    trials, spikes = get_data(sub = "subject_G", sesh = sesh)
+    trials, spikes = get_data(sub = subject, sesh = sesh)
     num_trials, num_cells = spikes.shape
     rule_cues = np.array(trials["rule_cue"])
     # get regressors
@@ -72,32 +82,62 @@ for sesh in range(5, 39):
     keep_active = np.where((avg_rates > 5) | (swap_avg_rates > 5))[0]
     all_uvars = np.concatenate([uvars, uswapvars], axis = 1)[keep_active, :]
 
-    env = lambda x: np.exp( -(0.8*x - 4.8) )+ 0.06
-    new_pairs, new_ns = get_modulated_pairs(spikes, all_uvars, env, keep_active, plot = False)
-    all_pairs.append(new_pairs)
-    all_ns.append(new_ns)
+    # Compare the same epoch in the original and condition-matched trial-shuffled data.
+    epoch_spikes, shuffled_spikes = shuffle_spikes(
+        trials, spikes, "rule_cue_on", t0, t1,
+        conditions = shuffle_conditions, seed = shuffle_seed)
+
+    # Use each dataset's own tested-pair counts and retain the individual unit-pair results.
+    for dataset, data, exc_list, inh_list, ns_list in [
+        ("real", epoch_spikes, all_exc, all_inh, all_ns),
+        #("shuffled", shuffled_spikes, all_exc_shuff, all_inh_shuff, all_ns_shuff),
+    ]:
+        print("testing jitter connections:", dataset)
+        exc, inh, new_ns, details = get_jitter_pairs(
+            data, all_uvars, keep_active, t0, t1, **jitter_params)
+        exc_list.append(exc)
+        inh_list.append(inh)
+        ns_list.append(new_ns)
+        all_connections.extend(dict(row, subject = subject, session = sesh, dataset = dataset) for row in details)
+        print(exc, inh, new_ns[:, -1])
 
 # %%
 
-pairs, ns = np.array(all_pairs), np.array(all_ns)
+# Retain session-level counts and a table of unit indices, uncorrected p-values, and effect sizes.
+exc_epoch, inh_epoch, ns_epoch = np.array(all_exc), np.array(all_inh), np.array(all_ns)
+exc_shuff, inh_shuff, ns_shuff = np.array(all_exc_shuff), np.array(all_inh_shuff), np.array(all_ns_shuff)
+connections = pd.DataFrame(all_connections)
+
+import pickle
+pickle.dump([(exc_epoch, inh_epoch, ns_epoch), (exc_shuff, inh_shuff, ns_shuff)], open("./results.p", "rb"))
 
 # Sum session-specific independence expectations before calculating overlap enrichment.
-observed = ns[:, :, 2].sum(axis = 0)
-expected = (ns[:, :, 0] * ns[:, :, 1] / ns[:, :, 3]).sum(axis = 0)
-enrichment = observed / expected
+observed = ns_epoch[:, :, 2].sum(axis = 0) # true pairs
+expected = (ns_epoch[:, :, 0] * ns_epoch[:, :, 1] / ns_epoch[:, :, 3]).sum(axis = 0) # expected in each session, then sum
+enrichment = observed / expected # compute ratio
 frac1, frac2, frac3, frac4 = enrichment[[0, 8, 2, 4]] # X1/X2, S1/S2, X1/S2, X2/S1
 
+print(frac1, frac2, frac3, frac4)
 
 # %%
 
 
-# Pool detected and tested pairs across sessions before calculating detection rates.
-pairtots = pairs.sum(axis = 0)
-tested = ns[:, :, 4].sum(axis = 0)
-predicted = pairtots[[1, 5]].sum() / tested[[1, 5]].sum() # (X1 -> S1), (X2 -> S2)
-pred_rev = pairtots[[6, 10]].sum() / tested[[6, 10]].sum() # (S1 -> X1), (S2 -> X2)
-control = pairtots[[2, 4]].sum() / tested[[2, 4]].sum() # (X1 -> S2), (X2 -> S1)
-ctrl_rev = pairtots[[7, 9]].sum() / tested[[7, 9]].sum() # (S1 -> X2), (S2 -> X1)
-within = pairtots[[0, 3, 8, 11]].sum() / tested[[0, 3, 8, 11]].sum() # (X1 -> X2), (X2 -> X1), (S1 -> S2), (S2 -> S1)
+# Pool detected and tested pairs before reporting separate excitatory and inhibitory percentages.
+summaries = []
+for dataset, exc, inh, ns in [("real", exc_epoch, inh_epoch, ns_epoch),
+                             ("shuffled", exc_shuff, inh_shuff, ns_shuff)]:
+    tested = ns[:, :, 4].sum(axis = 0)
+    for kind, counts in [("excitatory", exc), ("inhibitory", inh)]:
+        pairtots = counts.sum(axis = 0)
+        summary = dict(dataset = dataset, kind = kind)
+        for name, indices in [("predicted", [1, 5]), ("pred_rev", [6, 10]),
+                              ("control", [2, 4]), ("ctrl_rev", [7, 9]),
+                              ("within", [0, 3, 8, 11])]:
+            denominator = tested[indices].sum()
+            summary[name] = 100 * pairtots[indices].sum() / denominator if denominator else np.nan
+        summaries.append(summary)
+connection_rates = pd.DataFrame(summaries)
+print("Putative connection percentages (uncorrected):")
+print(connection_rates.to_string(index = False))
 
 # %%
